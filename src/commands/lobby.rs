@@ -1,8 +1,6 @@
 use crate::lobby_cache::LobbyCache;
 
 use crate::commands::util::create_interaction_response;
-use tokio::time::Duration;
-use tokio::time::sleep;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serenity::builder::CreateApplicationCommand;
@@ -13,7 +11,8 @@ use serenity::model::application::interaction::application_command::{
 use serenity::model::application::interaction::InteractionResponseType;
 use serenity::model::prelude::command::CommandOptionType;
 use std::sync::Arc;
-
+use tokio::time::sleep;
+use tokio::time::Duration;
 
 static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^aoe2de://0/\d+$").unwrap());
 
@@ -31,15 +30,14 @@ impl LobbyHandler {
         if let Some(lobby_id) = extract_lobby_id(options) {
             println!("Lobby ID: {}", lobby_id);
             let game_id = lobby_id.split('/').last().unwrap();
-            let guard = self.lobby_cache.lobby_cache.lock().await;
 
-            match guard.get(game_id) {
+            match self.lobby_cache.lobby_cache.get(game_id) {
                 None => {
                     create_interaction_response(ctx, command, "Lobby not found".to_string()).await;
                 }
-                Some(lobby) => {
-                    let lobby = lobby.clone();
-                    drop(guard);
+                Some(lobby_ref) => {
+                    let lobby = lobby_ref.clone();
+                    drop(lobby_ref);
                     let mut content = String::new();
                     for player in lobby.lobby.players.iter() {
                         content.push_str(&format!("{:?}\n", player.name));
@@ -51,10 +49,15 @@ impl LobbyHandler {
                         .create_interaction_response(&ctx.http, |response| {
                             response
                                 .kind(InteractionResponseType::ChannelMessageWithSource)
-                                .interaction_response_data(|message| message.embed(|embed| {
-                                    embed.title(format!("{}", lobby_id)).url(format!("https://aoe2.net/j/{}", game_id)).description(content);
-                                    embed
-                                }))
+                                .interaction_response_data(|message| {
+                                    message.embed(|embed| {
+                                        embed
+                                            .title(format!("{}", lobby_id))
+                                            .url(format!("https://aoe2.net/j/{}", game_id))
+                                            .description(content);
+                                        embed
+                                    })
+                                })
                         })
                         .await
                     {
@@ -77,16 +80,21 @@ impl LobbyHandler {
                         }
 
                         println!("Attempting to update interaction response");
-                        let guard = self.lobby_cache.lobby_cache.lock().await;
-                        match guard.get(game_id){
+
+                        match self.lobby_cache.lobby_cache.get(game_id) {
                             None => {
                                 println!("Lobby no longer running");
-                                create_interaction_response(ctx, command, "Lobby no longer running".to_string()).await;
+                                create_interaction_response(
+                                    ctx,
+                                    command,
+                                    "Lobby no longer running".to_string(),
+                                )
+                                .await;
                                 break;
                             }
-                            Some(lobby) => {
-                                let lobby = lobby.clone();
-                                drop(guard);
+                            Some(lobby_ref) => {
+                                let lobby = lobby_ref.clone();
+                                drop(lobby_ref);
                                 println!("Lobby still running");
                                 let mut content = String::new();
                                 for player in lobby.lobby.players.iter() {
@@ -96,7 +104,10 @@ impl LobbyHandler {
                                 if let Err(why) = command
                                     .edit_original_interaction_response(&ctx.http, |response| {
                                         response.embed(|embed| {
-                                            embed.title(format!("{}", lobby_id)).url(format!("https://aoe2.net/j/{}", game_id)).description(content);
+                                            embed
+                                                .title(format!("{}", lobby_id))
+                                                .url(format!("https://aoe2.net/j/{}", game_id))
+                                                .description(content);
                                             embed
                                         })
                                     })
@@ -108,7 +119,6 @@ impl LobbyHandler {
                             }
                         }
                     }
-
                 }
             }
         } else {

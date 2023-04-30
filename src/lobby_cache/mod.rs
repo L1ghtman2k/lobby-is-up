@@ -1,7 +1,5 @@
 mod model;
 
-
-use std::collections::HashMap;
 use crate::lobby_cache::model::{
     Lobby, WebsocketMessageReceive, WebsocketMessageSend, AOE2DE_APP_ID, AOE2DE_LOBBY_LOCATION,
 };
@@ -12,14 +10,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Once};
 use std::time;
 
-use tokio::io::AsyncWriteExt;
+use tokio::sync::broadcast;
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
-use tokio::time::{Duration};
+use tokio::time::Duration;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
-use tokio::sync::broadcast;
-
 
 // This wrapper is what you'll use to interact with the singleton
 pub struct LobbyCacheOnce {
@@ -51,13 +47,13 @@ impl LobbyCacheOnce {
 }
 
 #[derive(Debug, Clone)]
-pub struct StaleLobby{
+pub struct StaleLobby {
     pub lobby: Lobby,
-    pub last_checked_in: time::SystemTime
+    pub last_checked_in: time::SystemTime,
 }
 
 pub struct LobbyCache {
-    pub lobby_cache: Arc<TokioMutex<HashMap<String, StaleLobby>>>,
+    pub lobby_cache: Arc<DashMap<String, StaleLobby>>,
     pub shutdown: TokioMutex<oneshot::Sender<()>>,
     pub running: Arc<AtomicBool>,
     pub update_broadcast_sender: broadcast::Sender<()>,
@@ -70,7 +66,7 @@ impl LobbyCache {
         let update_broadcast_sender = broadcast::channel(32).0;
 
         LobbyCache {
-            lobby_cache: Arc::new(TokioMutex::new(HashMap::new())),
+            lobby_cache: Arc::new(DashMap::new()),
             shutdown: TokioMutex::new(shutdown),
             running: Arc::new(AtomicBool::new(false)),
             update_broadcast_sender,
@@ -144,7 +140,7 @@ impl LobbyCache {
                             serde_json::from_str(msg.to_string().as_str()).unwrap();
 
                         println!("is text or binary");
-                        match update{
+                        match update {
                             WebsocketMessageReceive::Ping { data } => {
                                 println!("ping");
                                 let message = serde_json::to_string(&WebsocketMessageSend {
@@ -152,32 +148,35 @@ impl LobbyCache {
                                     subscribe: None,
                                     location: None,
                                     data: Some(Value::from(data)),
-                                }).unwrap();
+                                })
+                                .unwrap();
                                 writer_tx_clone.send(Message::Text(message)).await.unwrap();
                             }
                             WebsocketMessageReceive::Lobby { data } => {
-                                println!("lobby. Trying to get map lock");
-                                let mut map = map_ref.lock().await;
+                                println!("lobby");
                                 for lobby in data {
-                                    if lobby.is_lobby{
+                                    if lobby.is_lobby {
                                         println!("deadlock on insert");
-                                        map.insert(lobby.id.clone(), StaleLobby{
-                                            lobby,
-                                            last_checked_in: time::SystemTime::now()
-                                        });
+                                        map_ref.insert(
+                                            lobby.id.clone(),
+                                            StaleLobby {
+                                                lobby,
+                                                last_checked_in: time::SystemTime::now(),
+                                            },
+                                        );
                                         println!("deadlock on insert done");
-                                    } else {
-                                        if map.contains_key(&lobby.id)
-                                        {
-                                            println!("deadlock on remove");
-                                            map.remove(&lobby.id);
-                                            println!("deadlock on remove done");
-                                        }
+                                    } else if map_ref.contains_key(&lobby.id) {
+                                        println!("deadlock on remove");
+                                        map_ref.remove(&lobby.id);
+                                        println!("deadlock on remove done");
                                     }
                                 }
 
-                                map.retain(|_, lobby| lobby.last_checked_in.elapsed().unwrap() < Duration::from_secs(120));
-                                println!("Map contains {} lobbies", map.len());
+                                map_ref.retain(|_, lobby| {
+                                    lobby.last_checked_in.elapsed().unwrap()
+                                        < Duration::from_secs(120)
+                                });
+                                println!("Map contains {} lobbies", map_ref.len());
                                 if self.update_broadcast_sender.receiver_count() > 0 {
                                     println!("Sending update broadcast");
                                     let _ = self.update_broadcast_sender.send(());
@@ -193,16 +192,15 @@ impl LobbyCache {
         });
 
         tokio::select! {
-                _ = read => {
-                    println!("Websocket reader closed");
-                },
-                _ = rx => {
-                    println!("Shutdown signal received");
-                }
+            _ = read => {
+                println!("Websocket reader closed");
+            },
+            _ = rx => {
+                println!("Shutdown signal received");
             }
+        }
 
         writer_tx.send(Message::Close(None)).await.unwrap();
         println!("Closing websocket");
-
     }
 }

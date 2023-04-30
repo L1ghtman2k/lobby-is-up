@@ -9,13 +9,9 @@ pub const AOE2DE_LOBBY_LOCATION: &str = "#aoe2de-lobbies";
 #[serde(tag = "message")]
 pub enum WebsocketMessageReceive {
     #[serde(rename = "ping")]
-    Ping {
-        data: i64,
-    },
+    Ping { data: i64 },
     #[serde(rename = "lobbies")]
-    Lobby {
-        data: Vec<Lobby>,
-    },
+    Lobby { data: Vec<Lobby> },
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -89,5 +85,3 @@ pub struct Player {
     pub country_code: Option<String>,
     pub rating: Option<i64>,
 }
-
-
