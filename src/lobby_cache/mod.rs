@@ -1,4 +1,4 @@
-mod model;
+pub mod model;
 
 use crate::lobby_cache::model::{
     Lobby, WebsocketMessageReceive, WebsocketMessageSend, AOE2DE_APP_ID, AOE2DE_LOBBY_LOCATION,

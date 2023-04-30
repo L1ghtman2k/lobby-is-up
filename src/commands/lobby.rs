@@ -1,6 +1,8 @@
 use crate::lobby_cache::LobbyCache;
 
 use crate::commands::util::create_interaction_response;
+use crate::lobby_cache::model::Lobby;
+
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serenity::builder::CreateApplicationCommand;
@@ -25,26 +27,25 @@ impl LobbyHandler {
         Self { lobby_cache }
     }
 
+    fn get_lobby(&self, game_id: &str) -> Option<Lobby> {
+        return self
+            .lobby_cache
+            .lobby_cache
+            .get(game_id)
+            .map(|lobby_ref| lobby_ref.clone().lobby);
+    }
+
     pub async fn run(&self, ctx: Context, command: ApplicationCommandInteraction) {
         let options = &command.data.options;
         if let Some(lobby_id) = extract_lobby_id(options) {
             println!("Lobby ID: {}", lobby_id);
             let game_id = lobby_id.split('/').last().unwrap();
 
-            match self.lobby_cache.lobby_cache.get(game_id) {
+            match self.get_lobby(game_id) {
                 None => {
                     create_interaction_response(ctx, command, "Lobby not found".to_string()).await;
                 }
-                Some(lobby_ref) => {
-                    let lobby = lobby_ref.clone();
-                    drop(lobby_ref);
-                    let mut content = String::new();
-                    for player in lobby.lobby.players.iter() {
-                        content.push_str(&format!("{:?}\n", player.name));
-                    }
-
-                    print!("Sent initial response");
-
+                Some(lobby) => {
                     if let Err(why) = command
                         .create_interaction_response(&ctx.http, |response| {
                             response
@@ -54,7 +55,7 @@ impl LobbyHandler {
                                         embed
                                             .title(format!("{}", lobby_id))
                                             .url(format!("https://aoe2.net/j/{}", game_id))
-                                            .description(content);
+                                            .description(format_players(&lobby));
                                         embed
                                     })
                                 })
@@ -63,8 +64,6 @@ impl LobbyHandler {
                     {
                         println!("Cannot respond to slash command: {}", why);
                     }
-
-                    println!("Subscribing to receiver");
 
                     let mut update_receiver = self.lobby_cache.subscribe();
 
@@ -81,7 +80,7 @@ impl LobbyHandler {
 
                         println!("Attempting to update interaction response");
 
-                        match self.lobby_cache.lobby_cache.get(game_id) {
+                        match self.get_lobby(game_id) {
                             None => {
                                 println!("Lobby no longer running");
                                 create_interaction_response(
@@ -92,14 +91,9 @@ impl LobbyHandler {
                                 .await;
                                 break;
                             }
-                            Some(lobby_ref) => {
-                                let lobby = lobby_ref.clone();
-                                drop(lobby_ref);
+
+                            Some(lobby) => {
                                 println!("Lobby still running");
-                                let mut content = String::new();
-                                for player in lobby.lobby.players.iter() {
-                                    content.push_str(&format!("{:?}\n", player.name));
-                                }
 
                                 if let Err(why) = command
                                     .edit_original_interaction_response(&ctx.http, |response| {
@@ -107,7 +101,7 @@ impl LobbyHandler {
                                             embed
                                                 .title(format!("{}", lobby_id))
                                                 .url(format!("https://aoe2.net/j/{}", game_id))
-                                                .description(content);
+                                                .description(format_players(&lobby));
                                             embed
                                         })
                                     })
@@ -152,4 +146,22 @@ pub fn extract_lobby_id(options: &[CommandDataOption]) -> Option<String> {
         }
     }
     None
+}
+
+fn format_players(lobby: &Lobby) -> String {
+    let mut content = String::new();
+    let mut players = vec![];
+    for player in lobby.players.iter() {
+        if let Some(name) = &player.name {
+            players.push(name);
+        }
+    }
+    //Sort players by name
+    players.sort();
+
+    for player in players.iter() {
+        content.push_str(&format!("{}\n", player));
+    }
+
+    content
 }
