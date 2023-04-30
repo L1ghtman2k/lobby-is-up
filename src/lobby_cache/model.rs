@@ -1,26 +1,32 @@
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
-use serde_with::skip_serializing_none;
 
 pub const AOE2DE_APP_ID: i64 = 813780;
 pub const AOE2DE_LOBBY_LOCATION: &str = "#aoe2de-lobbies";
-pub const AOE2DE_PING_DATA: i64 = 1682837538;
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebsocketMessageReceive {
-    pub data: Vec<Lobby>,
-    pub message: String,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "message")]
+pub enum WebsocketMessageReceive {
+    #[serde(rename = "ping")]
+    Ping {
+        data: i64,
+    },
+    #[serde(rename = "lobbies")]
+    Lobby {
+        data: Vec<Lobby>,
+    },
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[skip_serializing_none]
 #[serde(rename_all = "camelCase")]
 pub struct WebsocketMessageSend {
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subscribe: Option<Vec<i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
 
@@ -34,36 +40,54 @@ pub struct Lobby {
     pub num_players: i64,
     pub num_slots: i64,
     pub status: String,
+    pub cheats: Option<bool>,
+    pub full_tech_tree: Option<bool>,
+    pub game_type: Option<String>,
+    pub game_type_id: Option<i64>,
+    pub leaderboard: Option<String>,
     pub full: bool,
     pub is_lobby: bool,
-    pub game_type: String,
-    pub game_type_id: i64,
-    pub leaderboard: String,
     pub location: String,
-    pub map_size: String,
-    pub ranked: bool,
-    pub rating_type_id: i64,
     pub resources: Option<String>,
-    pub server: String,
-    pub starting_age: String,
-    pub num_spectators: i64,
-    pub opened: i64,
-    pub players: Vec<Player>,
     pub average_rating: Option<i64>,
+    pub lock_speed: Option<bool>,
+    pub lock_teams: Option<bool>,
+    pub map_size: Option<String>,
+    pub pop: Option<i64>,
+    pub ranked: Option<bool>,
+    pub rating_type_id: Option<i64>,
+    pub server: Option<String>,
+    pub shared_exploration: Option<bool>,
+    pub speed: Option<String>,
+    pub starting_age: Option<String>,
+    pub turbo: Option<bool>,
+    pub victory: Option<String>,
+    pub visibility: Option<String>,
+    pub num_spectators: Option<i64>,
+    pub started: Option<i64>,
+    #[serde(default)]
+    pub players: Vec<Player>,
+    pub opened: Option<i64>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Player {
-    pub steam_id: Option<String>,
-    pub profile_id: Option<i64>,
     pub slot: i64,
     pub slot_type: i64,
+    pub steam_id: Option<String>,
+    pub profile_id: Option<i64>,
     pub name: Option<String>,
     pub avatar: Option<String>,
     pub avatarfull: Option<String>,
     pub avatarmedium: Option<String>,
+    pub color: Option<i64>,
+    pub team: Option<i64>,
+    pub civ: Option<i64>,
+    pub civ_name: Option<String>,
     pub clan: Option<String>,
     pub country_code: Option<String>,
     pub rating: Option<i64>,
 }
+
+
