@@ -5,13 +5,15 @@ use crate::lobby_cache::model::Lobby;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
-use serenity::builder::CreateApplicationCommand;
+use serenity::builder::{CreateActionRow, CreateApplicationCommand, CreateComponents, CreateEmbed};
 use serenity::client::Context;
 use serenity::model::application::interaction::application_command::{
     ApplicationCommandInteraction, CommandDataOption,
 };
 use serenity::model::application::interaction::InteractionResponseType;
 use serenity::model::prelude::command::CommandOptionType;
+use serenity::model::prelude::component::ButtonStyle;
+use serenity::utils::{Color, Colour};
 use std::sync::Arc;
 use tokio::time::sleep;
 use tokio::time::Duration;
@@ -41,7 +43,6 @@ impl LobbyHandler {
         let options = &command.data.options;
         if let Some(lobby_id) = extract_lobby_id(options) {
             debug!("Lobby ID: {}", lobby_id);
-
             {
                 let last_update = self.lobby_cache.last_update.lock().await;
                 if last_update.is_none()
@@ -50,7 +51,7 @@ impl LobbyHandler {
                     create_interaction_response(
                         ctx,
                         command,
-                        "AOE2.net hasn't replied in over a minute".to_string(),
+                        "AOE2.net hasn't replied in over a minute. Try again later...".to_string(),
                     )
                     .await;
                     return;
@@ -59,29 +60,49 @@ impl LobbyHandler {
 
             let game_id = lobby_id.split('/').last().unwrap();
 
-            match self.get_lobby(game_id) {
-                None => {
-                    create_interaction_response(ctx, command, "Lobby not found".to_string()).await;
+            if let Err(why) = command
+                .create_interaction_response(&ctx.http, |response| {
+                    response
+                        .kind(InteractionResponseType::ChannelMessageWithSource)
+                        .interaction_response_data(|message| {
+                            message.embed(|embed| {
+                                embed
+                                    .title(format!("{}", lobby_id))
+                                    .url(format!("https://aoe2.net/j/{}", game_id));
+                                embed
+                            })
+                        })
+                })
+                .await
+            {
+                error!("Cannot respond to slash command: {}", why);
+                return;
+            }
+
+            let mut result: Option<Lobby> = None;
+
+            for _ in 0..10 {
+                if let Some(value) = self.get_lobby(game_id) {
+                    debug!("Aoe2 Registered lobby with id: {}", value.id);
+                    result = Some(value);
+                    break;
+                } else {
+                    debug!("Retrying...");
+                    sleep(Duration::from_secs(3)).await;  // optional delay
                 }
+            }
+
+            match result {
                 Some(lobby) => {
-                    let mut players = format_players(&lobby);
+                    let mut state = extract_state(&lobby);
                     if let Err(why) = command
-                        .create_interaction_response(&ctx.http, |response| {
-                            response
-                                .kind(InteractionResponseType::ChannelMessageWithSource)
-                                .interaction_response_data(|message| {
-                                    message.embed(|embed| {
-                                        embed
-                                            .title(format!("{}", lobby_id))
-                                            .url(format!("https://aoe2.net/j/{}", game_id))
-                                            .description(players.clone());
-                                        embed
-                                    })
-                                })
+                        .edit_original_interaction_response(&ctx.http, |response| {
+                            response.set_embed(create_embed(&state))
                         })
                         .await
                     {
                         error!("Cannot respond to slash command: {}", why);
+                        return;
                     }
 
                     let mut update_receiver = self.lobby_cache.subscribe();
@@ -123,24 +144,19 @@ impl LobbyHandler {
                             }
 
                             Some(lobby) => {
+                                let _new_state = extract_state(&lobby);
                                 debug!("Lobby still running");
-                                let new_players = format_players(&lobby);
-                                if new_players == players {
-                                    debug!("No change in players");
+                                let new_state = extract_state(&lobby);
+                                if new_state == state {
+                                    debug!("No change in state");
                                     continue;
                                 } else {
                                     debug!("Change in players");
-                                    players = new_players;
+                                    state = new_state;
                                 }
                                 if let Err(why) = command
                                     .edit_original_interaction_response(&ctx.http, |response| {
-                                        response.embed(|embed| {
-                                            embed
-                                                .title(format!("{}", lobby_id))
-                                                .url(format!("https://aoe2.net/j/{}", game_id))
-                                                .description(players.clone());
-                                            embed
-                                        })
+                                        response.set_embed(create_embed(&state))
                                     })
                                     .await
                                 {
@@ -150,6 +166,24 @@ impl LobbyHandler {
                             }
                         }
                     }
+                }
+                None => {
+                    if let Err(why) = command
+                        .edit_original_interaction_response(&ctx.http, |response| {
+                            response.embed(|embed| {
+                                embed
+                                    .title(format!("{}", lobby_id))
+                                    .url(format!("https://aoe2.net/j/{}", game_id))
+                                    .description("Aoe2.net hasn't picked up this lobby after 30 seconds.\nPlayer data will be unavailable.");
+                                embed
+                            })
+                        })
+                        .await
+                    {
+                        error!("Cannot respond to slash command: {}", why);
+                        return;
+                    }
+                    return;
                 }
             }
         } else {
@@ -183,6 +217,56 @@ pub fn extract_lobby_id(options: &[CommandDataOption]) -> Option<String> {
         }
     }
     None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct State {
+    players: String,
+    color: Color,
+    id: String,
+}
+
+fn extract_state(lobby: &Lobby) -> State {
+    State {
+        players: format_players(lobby),
+        color: extract_colors(lobby),
+        id: lobby.id.clone(),
+    }
+}
+
+fn create_embed(state: &State) -> CreateEmbed {
+    let mut embed = CreateEmbed::default();
+    embed
+        .title(format!("Lobby is up! (aoe2de://0/{})", state.id))
+        .url(format!("https://aoe2.net/j/{}", state.id))
+        .color(state.color)
+        .description(state.players.clone());
+    embed
+}
+
+// fn create_components(state: &State) -> CreateComponents{
+//     let mut components = CreateComponents::default();
+//     components.set_action_row(create_action_row(state));
+//     components
+// }
+//
+// fn create_action_row(state: &State) -> CreateActionRow{
+//     let mut row = CreateActionRow::default();
+//     row.create_button(|button| {
+//         button
+//             .style(ButtonStyle::Success)
+//             .label("Join")
+//             .url(format!("https://aoe2.net/j/{}", state.id))
+//     });
+//     row
+// }
+
+fn extract_colors(lobby: &Lobby) -> Color {
+    if lobby.full {
+        Color::RED
+    } else {
+        Colour::DARK_GREEN
+    }
 }
 
 fn format_players(lobby: &Lobby) -> String {
