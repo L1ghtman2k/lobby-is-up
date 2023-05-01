@@ -175,8 +175,11 @@ impl LobbyCache {
                         Ok((ws_stream, _)) => {
                             break ws_stream;
                         }
-                        Err(_) => {
-                            error!("Error connecting to websocket, retrying in 5 seconds");
+                        Err(e) => {
+                            error!(
+                                "Error connecting to websocket, retrying in 5 seconds. Error: {:?}",
+                                e
+                            );
                             interval.tick().await;
                         }
                     }
