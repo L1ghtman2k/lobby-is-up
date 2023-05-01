@@ -1,4 +1,5 @@
 use crate::lobby_cache::LobbyCache;
+use std::collections::HashMap;
 
 use crate::commands::util::create_interaction_response;
 use crate::lobby_cache::model::Lobby;
@@ -15,20 +16,66 @@ use serenity::model::prelude::command::CommandOptionType;
 
 use serenity::utils::{Color, Colour};
 use std::sync::Arc;
+
+use crate::commands::error;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tokio::time::Duration;
 use tracing::error;
 use tracing::log::debug;
+use uuid::Uuid;
 
 static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^aoe2de://0/\d+$").unwrap());
 
-pub(crate) struct LobbyHandler {
+type ChannelQueue = Arc<Mutex<HashMap<String, Vec<(Uuid, Arc<Sender<()>>)>>>>;
+
+pub struct LobbyHandler {
     lobby_cache: Arc<LobbyCache>,
+    channel_queue: ChannelQueue,
 }
 
 impl LobbyHandler {
     pub fn new(lobby_cache: Arc<LobbyCache>) -> Self {
-        Self { lobby_cache }
+        Self {
+            lobby_cache,
+            channel_queue: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    async fn register_lobby_id_channel(
+        &self,
+        game_id: &str,
+    ) -> error::Result<(Uuid, Arc<Receiver<()>>)> {
+        let mut channel_queue = self.channel_queue.lock().await;
+        if channel_queue.len() > 5 {
+            return Err(error::CommandError::TooManyLobbies);
+        }
+
+        let queue = channel_queue
+            .entry(game_id.to_string())
+            .or_insert(Vec::new());
+        if queue.len() > 3 {
+            let (_, sender) = queue.pop().unwrap();
+            sender.send(()).await.unwrap();
+        }
+
+        let (sender, receiver) = tokio::sync::mpsc::channel(3);
+
+        let uuid = Uuid::new_v4();
+
+        queue.push((uuid, Arc::new(sender)));
+
+        Ok((uuid, Arc::new(receiver)))
+    }
+
+    async fn unregister(channel_queue: ChannelQueue, game_id: &str, uuid: Uuid) {
+        let mut channel_queue = channel_queue.lock().await;
+        let queue = channel_queue.get_mut(game_id).unwrap();
+        queue.retain(|(id, _)| id != &uuid);
+        if queue.is_empty() {
+            channel_queue.remove(game_id);
+        }
     }
 
     fn get_lobby(&self, game_id: &str) -> Option<Lobby> {
@@ -39,7 +86,7 @@ impl LobbyHandler {
             .map(|lobby_ref| lobby_ref.clone().lobby);
     }
 
-    pub async fn run(&self, ctx: Context, command: ApplicationCommandInteraction) {
+    pub async fn run(&self, ctx: &Context, command: ApplicationCommandInteraction) {
         let options = &command.data.options;
         if let Some(lobby_id) = extract_lobby_id(options) {
             debug!("Lobby ID: {}", lobby_id);
@@ -58,7 +105,26 @@ impl LobbyHandler {
                 }
             }
 
-            let game_id = lobby_id.split('/').last().unwrap();
+            let game_id = lobby_id.clone();
+            let game_id = game_id.split('/').last().unwrap();
+
+            let (uuid, _receiver) = match self.register_lobby_id_channel(game_id).await {
+                Ok(receiver) => receiver,
+                Err(error) => {
+                    create_interaction_response(ctx, command, format!("{}", error)).await;
+                    return;
+                }
+            };
+
+            let channel_queue_clone = self.channel_queue.clone();
+            let game_id_clone = game_id.to_string();
+            let uuid_clone = uuid;
+
+            let _d = Defer::new(|| {
+                tokio::spawn(async move {
+                    Self::unregister(channel_queue_clone, game_id_clone.as_str(), uuid_clone).await
+                });
+            });
 
             if let Err(why) = command
                 .create_interaction_response(&ctx.http, |response| {
@@ -76,6 +142,7 @@ impl LobbyHandler {
                 .await
             {
                 error!("Cannot respond to slash command: {}", why);
+
                 return;
             }
 
@@ -217,10 +284,30 @@ pub fn extract_lobby_id(options: &[CommandDataOption]) -> Option<String> {
     None
 }
 
+struct Defer<F: FnOnce()> {
+    f: Option<F>,
+}
+
+impl<F: FnOnce()> Defer<F> {
+    fn new(f: F) -> Defer<F> {
+        Defer { f: Some(f) }
+    }
+}
+
+impl<F: FnOnce()> Drop for Defer<F> {
+    fn drop(&mut self) {
+        if let Some(f) = self.f.take() {
+            f();
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct State {
     players: String,
     color: Color,
+    num_players: i64,
+    num_slots: i64,
     id: String,
 }
 
@@ -228,16 +315,25 @@ fn extract_state(lobby: &Lobby) -> State {
     State {
         players: format_players(lobby),
         color: extract_colors(lobby),
+        num_players: lobby.num_players,
+        num_slots: lobby.num_slots,
         id: lobby.id.clone(),
     }
 }
 
 fn create_embed(state: &State) -> CreateEmbed {
     let mut embed = CreateEmbed::default();
+    let remaining_players = state.num_slots - state.num_players;
+    let remaining_players = if remaining_players > 0 {
+        format!("+{}", remaining_players)
+    } else {
+        "Lobby is full".to_string()
+    };
     embed
-        .title(format!("Lobby is up! (aoe2de://0/{})", state.id))
+        .title(format!("Lobby is up! aoe2de://0/{}", state.id))
         .url(format!("https://aoe2.net/j/{}", state.id))
         .color(state.color)
+        .footer(|footer| footer.text(remaining_players))
         .description(state.players.clone());
     embed
 }

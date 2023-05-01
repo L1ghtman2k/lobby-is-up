@@ -4,7 +4,7 @@ use serenity::model::application::interaction::InteractionResponseType;
 use tracing::error;
 
 pub async fn create_interaction_response<D: ToString>(
-    ctx: Context,
+    ctx: &Context,
     command: ApplicationCommandInteraction,
     content: D,
 ) {

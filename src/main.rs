@@ -7,6 +7,7 @@ use std::{env, mem};
 use futures::future::join_all;
 use serenity::async_trait;
 use std::sync::atomic::Ordering;
+
 use tokio::signal;
 
 use crate::commands::lobby::LobbyHandler;
@@ -62,11 +63,11 @@ impl EventHandler for Handler {
             match command.data.name.as_str() {
                 "lobby" => {
                     LobbyHandler::new(self.lobby_cache.clone())
-                        .run(ctx, command)
+                        .run(&ctx, command)
                         .await
                 }
                 _ => {
-                    create_interaction_response(ctx, command, "not implemented :(".to_string())
+                    create_interaction_response(&ctx, command, "not implemented :(".to_string())
                         .await;
                 }
             };
