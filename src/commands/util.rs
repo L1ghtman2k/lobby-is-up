@@ -1,6 +1,7 @@
 use serenity::client::Context;
 use serenity::model::application::interaction::application_command::ApplicationCommandInteraction;
 use serenity::model::application::interaction::InteractionResponseType;
+use tracing::error;
 
 pub async fn create_interaction_response<D: ToString>(
     ctx: Context,
@@ -15,6 +16,6 @@ pub async fn create_interaction_response<D: ToString>(
         })
         .await
     {
-        println!("Cannot respond to slash command: {}", why);
+        error!("Cannot respond to slash command: {}", why);
     }
 }

@@ -21,6 +21,7 @@ use tokio::time::Duration;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::http::header::USER_AGENT;
 use tokio_tungstenite::tungstenite::{http, Message};
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 // This wrapper is what you'll use to interact with the singleton
@@ -98,7 +99,7 @@ impl LobbyCache {
 
             match update {
                 WebsocketMessageReceive::Ping { data } => {
-                    println!("ping");
+                    debug!("ping");
                     let message = serde_json::to_string(&WebsocketMessageSend {
                         message: "ping".to_string(),
                         subscribe: None,
@@ -108,7 +109,7 @@ impl LobbyCache {
                     writer_tx_clone.send(Message::Text(message)).await.unwrap();
                 }
                 WebsocketMessageReceive::Lobby { data } => {
-                    println!("lobby");
+                    debug!("lobby");
                     for lobby in data {
                         if lobby.is_lobby {
                             map_ref.insert(
@@ -127,7 +128,7 @@ impl LobbyCache {
                         lobby.last_checked_in.elapsed().unwrap() < Duration::from_secs(120)
                     });
                     if update_broadcast_sender.receiver_count() > 0 {
-                        println!("Sending update broadcast");
+                        debug!("Sending update broadcast");
                         let _ = update_broadcast_sender.send(());
                     }
 
@@ -155,12 +156,12 @@ impl LobbyCache {
         let background_task = tokio::spawn(async move {
             // Connect to the server, and retry if the connection fails
             let mut interval = tokio::time::interval(Duration::from_secs(5));
-            println!("Starting websocket connection loop");
+            info!("Starting websocket connection loop");
             loop {
                 let (connection_restart_tx, mut connection_restart_rx) = broadcast::channel(32);
 
                 let ws_stream = loop {
-                    println!("Connecting to websocket...");
+                    info!("Connecting to websocket...");
                     http::Request::builder()
                         .uri(AOE2_URL.as_str())
                         .header(
@@ -175,18 +176,18 @@ impl LobbyCache {
                             break ws_stream;
                         }
                         Err(_) => {
-                            println!("Error connecting to websocket, retrying in 5 seconds");
+                            error!("Error connecting to websocket, retrying in 5 seconds");
                             interval.tick().await;
                         }
                     }
                 };
-                println!("WebSocket handshake has been successfully completed");
+                info!("WebSocket handshake has been successfully completed");
 
                 let (mut write, mut read) = ws_stream.split();
 
                 let (writer_tx, mut writer_rx) = mpsc::channel(32);
 
-                println!("Starting websocket writer");
+                debug!("Starting websocket writer");
                 // Spawn a task to write messages from the channel to the WebSocket
                 let connection_restart_tx_clone = connection_restart_tx.clone();
                 let mut shutdown_broadcast_sender_writer = background_shutdown_tx_moved.subscribe();
@@ -195,26 +196,26 @@ impl LobbyCache {
                     loop {
                         tokio::select! {
                             _ = shutdown_broadcast_sender_writer.recv() => {
-                                println!("Shutdown received, shutting down websocket writer");
+                                warn!("Shutdown received, shutting down websocket writer");
                                 break;
                             }
                             _ = connection_restart_rx_writer.recv() => {
-                                println!("Restart received, shutting down websocket writer");
+                                warn!("Restart received, shutting down websocket writer");
                                 break;
                             }
                             msg = writer_rx.recv() => {
                                 match msg {
                                     Some(msg) => {
-                                        println!("Sending message: {:?}", msg);
+                                        debug!("Sending message: {:?}", msg);
                                         if let Err(e) = write.send(msg).await {
                                             let e = Arc::new(e);
-                                            println!("Error sending message: {:?}", e);
+                                            error!("Error sending message: {:?}", e);
                                             connection_restart_tx_clone.send(e).unwrap();
                                             break;
                                         }
                                     }
                                     None => {
-                                        println!("Websocket writer channel closed");
+                                        warn!("Websocket writer channel closed");
                                         break;
                                     }
                                 }
@@ -259,15 +260,15 @@ impl LobbyCache {
                 let mut shutdown_broadcast_sender_reader = background_shutdown_tx_moved.subscribe();
                 let last_update_clone = last_update_moved.clone();
                 let _read_task = tokio::spawn(async move {
-                    println!("Starting websocket reader");
+                    debug!("Starting websocket reader");
                     loop {
                         tokio::select! {
                             _ = shutdown_broadcast_sender_reader.recv() => {
-                                println!("Shutdown received, shutting down websocket reader");
+                                warn!("Shutdown received, shutting down websocket reader");
                                 break;
                             }
                             _ = connection_restart_rx_reader.recv() => {
-                                println!("Restart received, shutting down websocket reader");
+                                warn!("Restart received, shutting down websocket reader");
                                 break;
                             }
                             message = read.next() => {
@@ -282,16 +283,16 @@ impl LobbyCache {
                                         )
                                             .await
                                         {
-                                            println!("Error handling message: {:?}", e);
+                                            error!("Error handling message: {:?}", e);
                                         }
                                     }
                                     Some(Err(e)) => {
                                         let e = Arc::new(e);
-                                        println!("Error reading message: {:?}", e);
+                                        error!("Error reading message: {:?}", e);
                                         connection_restart_tx_clone.send(e.clone()).unwrap();
                                     }
                                     None => {
-                                        println!("Websocket reader channel closed. Restarting connection");
+                                        warn!("Websocket reader channel closed. Restarting connection");
                                         connection_restart_tx_clone.send(Arc::new(tokio_tungstenite::tungstenite::error::Error::ConnectionClosed)).unwrap();
                                         break;
                                     }
@@ -303,16 +304,16 @@ impl LobbyCache {
 
                 tokio::select! {
                     err = connection_restart_rx.recv() => {
-                        println!("Connection error: {:?}", err);
+                        error!("Connection error: {:?}", err);
                         futures::future::join_all(vec![
                             _write_task,
                             _read_task,
                         ]).await;
-                        println!("Restarting connection");
+                        info!("Restarting connection");
                     },
                     _ = background_shutdown_tx_cloned.recv() => {
                         writer_tx.send(Message::Close(None)).await.unwrap();
-                        println!("Closing websocket");
+                        warn!("Closing websocket");
                         break
                     }
                 }

@@ -15,8 +15,16 @@ use crate::lobby_cache::LobbyCache;
 use serenity::model::application::interaction::Interaction;
 use serenity::model::gateway::Ready;
 use serenity::model::id::GuildId;
+
 use serenity::prelude::*;
 use tokio::sync::{mpsc, oneshot};
+use tracing::log::debug;
+use tracing::subscriber::set_global_default;
+use tracing::{error, info, warn};
+use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
+use tracing_log::LogTracer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{EnvFilter, Registry};
 
 struct Handler {
     lobby_cache: Arc<LobbyCache>,
@@ -31,7 +39,7 @@ impl Handler {
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
-        println!("{} is connected!", ready.user.name);
+        info!("{} is connected!", ready.user.name);
 
         let guild_id = GuildId(
             env::var("GUILD_ID")
@@ -49,7 +57,7 @@ impl EventHandler for Handler {
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = interaction {
-            println!("Received command interaction: {:#?}", command);
+            debug!("Received command interaction: {:#?}", command);
 
             match command.data.name.as_str() {
                 "lobby" => {
@@ -68,6 +76,35 @@ impl EventHandler for Handler {
 
 #[tokio::main]
 async fn main() {
+    let mut filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let formatting_layer = BunyanFormattingLayer::new("lobby_is_up".to_string(), std::io::stdout);
+    for (log_directive, directive_level) in [
+        ("lobby_is_up".to_string(), "info".to_string()),
+        ("serenity".to_string(), "warn".to_string()),
+        ("_".to_string(), "error".to_string()),
+    ] {
+        filter = filter.add_directive(
+            format!("{}={}", log_directive, directive_level)
+                .parse()
+                .unwrap(),
+        );
+    }
+    let subscriber = Registry::default()
+        .with(filter)
+        .with(JsonStorageLayer)
+        .with(formatting_layer);
+
+    match LogTracer::init() {
+        Ok(_) => {
+            if let Err(e) = set_global_default(subscriber) {
+                panic!("Failed to set global subscriber: {}", e);
+            }
+        }
+        Err(e) => {
+            panic!("Failed to set subscriber: {}", e);
+        }
+    }
+
     let (shutdown_send, mut shutdown_recv) = mpsc::unbounded_channel();
 
     // Get lobby cache singleton
@@ -80,7 +117,7 @@ async fn main() {
     // Start the lobby cache background task
     let _lobby_cache_task = tokio::spawn(async move {
         lobby_cache_shared.run().await;
-        println!("Lobby cache shutdown");
+        warn!("Lobby cache shutdown");
         shutdown_lobby_cache_clone.send(()).unwrap();
     });
 
@@ -103,9 +140,9 @@ async fn main() {
 
     let _discord_task = tokio::spawn(async move {
         if let Err(why) = client.start().await {
-            eprintln!("Client error: {:?}", why);
+            error!("Client error: {:?}", why);
         }
-        println!("Discord client shutdown");
+        warn!("Discord client shutdown");
         shutdown_discord_client_clone.send(()).unwrap();
     });
 
@@ -118,7 +155,7 @@ async fn main() {
         },
     }
 
-    println!("Received shutdown signal");
+    warn!("Received shutdown signal");
     if lobby_cache.running.load(Ordering::SeqCst) {
         let mut shutdown_signal = lobby_cache.shutdown.lock().await;
 

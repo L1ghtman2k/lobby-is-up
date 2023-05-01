@@ -15,6 +15,8 @@ use serenity::model::prelude::command::CommandOptionType;
 use std::sync::Arc;
 use tokio::time::sleep;
 use tokio::time::Duration;
+use tracing::error;
+use tracing::log::debug;
 
 static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^aoe2de://0/\d+$").unwrap());
 
@@ -38,7 +40,7 @@ impl LobbyHandler {
     pub async fn run(&self, ctx: Context, command: ApplicationCommandInteraction) {
         let options = &command.data.options;
         if let Some(lobby_id) = extract_lobby_id(options) {
-            println!("Lobby ID: {}", lobby_id);
+            debug!("Lobby ID: {}", lobby_id);
 
             {
                 let last_update = self.lobby_cache.last_update.lock().await;
@@ -78,27 +80,27 @@ impl LobbyHandler {
                         })
                         .await
                     {
-                        println!("Cannot respond to slash command: {}", why);
+                        error!("Cannot respond to slash command: {}", why);
                     }
 
                     let mut update_receiver = self.lobby_cache.subscribe();
 
                     loop {
-                        println!("Inside of updater loop");
+                        debug!("Inside of updater loop");
                         tokio::select! {
                             _ = update_receiver.recv() => {
-                                println!("Received update");
+                                debug!("Received update");
                             }
                             _ = sleep(Duration::from_secs(10)) => {
-                                println!("Mandatory update");
+                                debug!("Mandatory update");
                             }
                         }
 
-                        println!("Attempting to update interaction response");
+                        debug!("Attempting to update interaction response");
 
                         match self.get_lobby(game_id) {
                             None => {
-                                println!("Lobby no longer running");
+                                debug!("Lobby no longer running");
 
                                 if let Err(why) = command
                                     .edit_original_interaction_response(&ctx.http, |response| {
@@ -112,7 +114,7 @@ impl LobbyHandler {
                                     })
                                     .await
                                 {
-                                    println!("Cannot respond to slash command: {}", why);
+                                    error!("Cannot respond to slash command: {}", why);
                                     break;
                                 }
 
@@ -120,7 +122,7 @@ impl LobbyHandler {
                             }
 
                             Some(lobby) => {
-                                println!("Lobby still running");
+                                debug!("Lobby still running");
 
                                 if let Err(why) = command
                                     .edit_original_interaction_response(&ctx.http, |response| {
@@ -134,7 +136,7 @@ impl LobbyHandler {
                                     })
                                     .await
                                 {
-                                    println!("Cannot respond to slash command: {}", why);
+                                    error!("Cannot respond to slash command: {}", why);
                                     break;
                                 }
                             }
