@@ -5,14 +5,14 @@ use crate::lobby_cache::model::Lobby;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
-use serenity::builder::{CreateActionRow, CreateApplicationCommand, CreateComponents, CreateEmbed};
+use serenity::builder::{CreateApplicationCommand, CreateEmbed};
 use serenity::client::Context;
 use serenity::model::application::interaction::application_command::{
     ApplicationCommandInteraction, CommandDataOption,
 };
 use serenity::model::application::interaction::InteractionResponseType;
 use serenity::model::prelude::command::CommandOptionType;
-use serenity::model::prelude::component::ButtonStyle;
+
 use serenity::utils::{Color, Colour};
 use std::sync::Arc;
 use tokio::time::sleep;
@@ -88,7 +88,7 @@ impl LobbyHandler {
                     break;
                 } else {
                     debug!("Retrying...");
-                    sleep(Duration::from_secs(3)).await;  // optional delay
+                    sleep(Duration::from_secs(3)).await; // optional delay
                 }
             }
 
@@ -181,9 +181,7 @@ impl LobbyHandler {
                         .await
                     {
                         error!("Cannot respond to slash command: {}", why);
-                        return;
                     }
-                    return;
                 }
             }
         } else {
