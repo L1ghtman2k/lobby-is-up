@@ -108,7 +108,7 @@ impl LobbyHandler {
             let game_id = lobby_id.clone();
             let game_id = game_id.split('/').last().unwrap();
 
-            let (uuid, _receiver) = match self.register_lobby_id_channel(game_id).await {
+            let (uuid, mut cancel_receiver) = match self.register_lobby_id_channel(game_id).await {
                 Ok(receiver) => receiver,
                 Err(error) => {
                     create_interaction_response(ctx, command, format!("{}", error)).await;
@@ -177,6 +177,10 @@ impl LobbyHandler {
                     loop {
                         debug!("Inside of updater loop");
                         tokio::select! {
+                            _ = cancel_receiver.recv() => {
+                                debug!("Received cancel");
+                                break;
+                            }
                             _ = update_receiver.recv() => {
                                 debug!("Received update");
                             }
