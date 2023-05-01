@@ -39,6 +39,22 @@ impl LobbyHandler {
         let options = &command.data.options;
         if let Some(lobby_id) = extract_lobby_id(options) {
             println!("Lobby ID: {}", lobby_id);
+
+            {
+                let last_update = self.lobby_cache.last_update.lock().await;
+                if last_update.is_none()
+                    || last_update.unwrap().elapsed().unwrap() > Duration::from_secs(60)
+                {
+                    create_interaction_response(
+                        ctx,
+                        command,
+                        "AOE2.net hasn't replied in over a minute".to_string(),
+                    )
+                    .await;
+                    return;
+                }
+            }
+
             let game_id = lobby_id.split('/').last().unwrap();
 
             match self.get_lobby(game_id) {

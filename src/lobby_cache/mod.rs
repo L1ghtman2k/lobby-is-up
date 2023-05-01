@@ -62,6 +62,7 @@ pub struct StaleLobby {
 
 pub struct LobbyCache {
     pub lobby_cache: Arc<DashMap<String, StaleLobby>>,
+    pub last_update: Arc<TokioMutex<Option<time::SystemTime>>>,
     pub shutdown: Arc<TokioMutex<oneshot::Sender<()>>>,
     pub running: Arc<AtomicBool>,
     pub update_broadcast_sender: broadcast::Sender<()>,
@@ -73,6 +74,7 @@ impl LobbyCache {
         let update_broadcast_sender = broadcast::channel(32).0;
 
         LobbyCache {
+            last_update: Arc::new(TokioMutex::new(None)),
             lobby_cache: Arc::new(DashMap::new()),
             shutdown: Arc::new(TokioMutex::new(shutdown)),
             running: Arc::new(AtomicBool::new(false)),
@@ -86,11 +88,11 @@ impl LobbyCache {
 
     async fn handle_message(
         update_broadcast_sender: broadcast::Sender<()>,
+        last_update: Arc<TokioMutex<Option<time::SystemTime>>>,
         map_ref: Arc<DashMap<String, StaleLobby>>,
         msg: Message,
         writer_tx_clone: Sender<Message>,
     ) -> error::Result<()> {
-        println!("Received message");
         if msg.is_text() || msg.is_binary() {
             let update: WebsocketMessageReceive = serde_json::from_str(msg.to_string().as_str())?;
 
@@ -124,11 +126,12 @@ impl LobbyCache {
                     map_ref.retain(|_, lobby| {
                         lobby.last_checked_in.elapsed().unwrap() < Duration::from_secs(120)
                     });
-                    println!("Map contains {} lobbies", map_ref.len());
                     if update_broadcast_sender.receiver_count() > 0 {
                         println!("Sending update broadcast");
                         let _ = update_broadcast_sender.send(());
                     }
+
+                    last_update.lock().await.replace(time::SystemTime::now());
                 }
             }
         }
@@ -148,6 +151,7 @@ impl LobbyCache {
 
         let background_shutdown_tx_moved = background_shutdown_tx.clone();
         let mut background_shutdown_tx_cloned = background_shutdown_tx.subscribe();
+        let last_update_moved = self.last_update.clone();
         let background_task = tokio::spawn(async move {
             // Connect to the server, and retry if the connection fails
             let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -253,6 +257,7 @@ impl LobbyCache {
                 let map_ref = map_ref_moved.clone();
                 let mut connection_restart_rx_reader = connection_restart_tx.subscribe();
                 let mut shutdown_broadcast_sender_reader = background_shutdown_tx_moved.subscribe();
+                let last_update_clone = last_update_moved.clone();
                 let _read_task = tokio::spawn(async move {
                     println!("Starting websocket reader");
                     loop {
@@ -270,6 +275,7 @@ impl LobbyCache {
                                     Some(Ok(msg)) => {
                                         if let Err(e) = Self::handle_message(
                                             update_broadcast_sender_cloned.clone(),
+                                            last_update_clone.clone(),
                                             map_ref.clone(),
                                             msg,
                                             writer_tx_clone.clone(),
