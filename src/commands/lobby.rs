@@ -83,12 +83,23 @@ impl LobbyHandler {
                         match self.get_lobby(game_id) {
                             None => {
                                 println!("Lobby no longer running");
-                                create_interaction_response(
-                                    ctx,
-                                    command,
-                                    "Lobby no longer running".to_string(),
-                                )
-                                .await;
+
+                                if let Err(why) = command
+                                    .edit_original_interaction_response(&ctx.http, |response| {
+                                        response.embed(|embed| {
+                                            embed
+                                                .title(format!("{}", lobby_id))
+                                                .url(format!("https://aoe2.net/j/{}", game_id))
+                                                .description("Lobby no longer active");
+                                            embed
+                                        })
+                                    })
+                                    .await
+                                {
+                                    println!("Cannot respond to slash command: {}", why);
+                                    break;
+                                }
+
                                 break;
                             }
 
@@ -153,7 +164,9 @@ fn format_players(lobby: &Lobby) -> String {
     let mut players = vec![];
     for player in lobby.players.iter() {
         if let Some(name) = &player.name {
-            players.push(name);
+            players.push(name.clone());
+        } else {
+            players.push("Unknown".to_string());
         }
     }
     //Sort players by name

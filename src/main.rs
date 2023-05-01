@@ -4,6 +4,7 @@ mod lobby_cache;
 use std::sync::Arc;
 use std::{env, mem};
 
+use futures::future::join_all;
 use serenity::async_trait;
 use std::sync::atomic::Ordering;
 use tokio::signal;
@@ -39,15 +40,11 @@ impl EventHandler for Handler {
                 .expect("GUILD_ID must be an integer"),
         );
 
-        let commands = GuildId::set_application_commands(&guild_id, &ctx.http, |commands| {
+        let _commands = GuildId::set_application_commands(&guild_id, &ctx.http, |commands| {
             commands.create_application_command(|command| LobbyHandler::register(command))
         })
-        .await;
-
-        println!(
-            "I now have the following guild slash commands: {:#?}",
-            commands
-        );
+        .await
+        .expect("Failed to register application commands");
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
@@ -113,8 +110,12 @@ async fn main() {
     });
 
     tokio::select! {
-        _ = signal::ctrl_c() => {},
-        _ = shutdown_recv.recv() => {},
+        _ = signal::ctrl_c() => {
+
+        },
+        _ = shutdown_recv.recv() => {
+
+        },
     }
 
     println!("Received shutdown signal");
@@ -129,4 +130,6 @@ async fn main() {
         let _ = shutdown_signal.send(());
     }
     shard_manager.lock().await.shutdown_all().await;
+
+    join_all(vec![_lobby_cache_task, _discord_task]).await;
 }
