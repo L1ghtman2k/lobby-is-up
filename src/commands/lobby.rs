@@ -64,6 +64,7 @@ impl LobbyHandler {
                     create_interaction_response(ctx, command, "Lobby not found".to_string()).await;
                 }
                 Some(lobby) => {
+                    let mut players = format_players(&lobby);
                     if let Err(why) = command
                         .create_interaction_response(&ctx.http, |response| {
                             response
@@ -73,7 +74,7 @@ impl LobbyHandler {
                                         embed
                                             .title(format!("{}", lobby_id))
                                             .url(format!("https://aoe2.net/j/{}", game_id))
-                                            .description(format_players(&lobby));
+                                            .description(players.clone());
                                         embed
                                     })
                                 })
@@ -123,14 +124,21 @@ impl LobbyHandler {
 
                             Some(lobby) => {
                                 debug!("Lobby still running");
-
+                                let new_players = format_players(&lobby);
+                                if new_players == players {
+                                    debug!("No change in players");
+                                    continue;
+                                } else {
+                                    debug!("Change in players");
+                                    players = new_players;
+                                }
                                 if let Err(why) = command
                                     .edit_original_interaction_response(&ctx.http, |response| {
                                         response.embed(|embed| {
                                             embed
                                                 .title(format!("{}", lobby_id))
                                                 .url(format!("https://aoe2.net/j/{}", game_id))
-                                                .description(format_players(&lobby));
+                                                .description(players.clone());
                                             embed
                                         })
                                     })
