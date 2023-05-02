@@ -16,6 +16,6 @@ pub async fn create_interaction_response<D: ToString>(
         })
         .await
     {
-        error!("Cannot respond to slash command: {}", why);
+        error!("Cannot respond to slash command: {:?}", why);
     }
 }

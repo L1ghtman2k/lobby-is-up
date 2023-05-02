@@ -1,8 +1,8 @@
 mod commands;
 mod lobby_cache;
 
+use std::env;
 use std::sync::Arc;
-use std::{env, mem};
 
 use futures::future::join_all;
 use serenity::async_trait;
@@ -18,7 +18,7 @@ use serenity::model::gateway::Ready;
 use serenity::model::id::GuildId;
 
 use serenity::prelude::*;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tracing::log::debug;
 use tracing::subscriber::set_global_default;
 use tracing::{error, info, warn};
@@ -158,14 +158,8 @@ async fn main() {
 
     warn!("Received shutdown signal");
     if lobby_cache.running.load(Ordering::SeqCst) {
-        let mut shutdown_signal = lobby_cache.shutdown.lock().await;
-
-        // Take the Sender out of the mutex, replacing it with a new Sender
-        let (new_tx, _new_rx) = oneshot::channel::<()>();
-        let shutdown_signal = mem::replace(&mut *shutdown_signal, new_tx);
-
-        // Now you can use the old sender
-        let _ = shutdown_signal.send(());
+        let shutdown_signal = lobby_cache.shutdown.lock().await;
+        shutdown_signal.send(()).await.unwrap();
     }
     shard_manager.lock().await.shutdown_all().await;
 

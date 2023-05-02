@@ -2,27 +2,32 @@ pub mod error;
 pub mod model;
 
 use crate::lobby_cache::model::{
-    Lobby, WebsocketMessageReceive, WebsocketMessageSend, AOE2DE_APP_ID, AOE2DE_LOBBY_LOCATION,
+    Lobby, WebsocketMessageReceiveAllCurrentLobbies, WebsocketMessageReceiveFollowUp,
 };
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use serde_json::Value;
-use serenity::futures::{SinkExt, StreamExt};
+use std::collections::HashMap;
+
+use std::str::FromStr;
+
+use serenity::futures::StreamExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Once};
 use std::time;
 
 use tokio::sync::broadcast;
-use tokio::sync::mpsc::Sender;
 
-use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
-use tokio::time::Duration;
+use tokio::sync::{mpsc, Mutex as TokioMutex};
+use tokio::time::{sleep, Duration};
 
 use tokio_tungstenite::connect_async;
+
+use tokio_tungstenite::tungstenite::error::UrlError;
+use tokio_tungstenite::tungstenite::handshake::client::{generate_key, Request};
 use tokio_tungstenite::tungstenite::http::header::USER_AGENT;
-use tokio_tungstenite::tungstenite::{http, Message};
+use tokio_tungstenite::tungstenite::http::Uri;
+use tokio_tungstenite::tungstenite::{http, Error, Message};
 use tracing::{debug, error, info, warn};
-use url::Url;
 
 // This wrapper is what you'll use to interact with the singleton
 pub struct LobbyCacheOnce {
@@ -33,7 +38,10 @@ pub struct LobbyCacheOnce {
     once: Once,
 }
 
-static AOE2_URL: Lazy<Url> = Lazy::new(|| Url::parse("wss://aoe2.net/ws").unwrap());
+static AOE2LOBBY_URL: Lazy<Uri> =
+    Lazy::new(|| Uri::from_str("wss://aoe2lobby.com/ws/lobby/").unwrap());
+static AOE2LOBBY_ORIGIN: Lazy<http::HeaderValue> =
+    Lazy::new(|| http::HeaderValue::from_str("https://aoe2lobby.com").unwrap());
 
 impl LobbyCacheOnce {
     pub fn new() -> Self {
@@ -55,23 +63,17 @@ impl LobbyCacheOnce {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct StaleLobby {
-    pub lobby: Lobby,
-    pub last_checked_in: time::SystemTime,
-}
-
 pub struct LobbyCache {
-    pub lobby_cache: Arc<DashMap<String, StaleLobby>>,
+    pub lobby_cache: Arc<DashMap<String, Lobby>>,
     pub last_update: Arc<TokioMutex<Option<time::SystemTime>>>,
-    pub shutdown: Arc<TokioMutex<oneshot::Sender<()>>>,
+    pub shutdown: Arc<TokioMutex<mpsc::Sender<()>>>,
     pub running: Arc<AtomicBool>,
     pub update_broadcast_sender: broadcast::Sender<()>,
 }
 
 impl LobbyCache {
     pub fn new() -> Self {
-        let (shutdown, _) = oneshot::channel();
+        let (shutdown, _) = mpsc::channel(3);
         let update_broadcast_sender = broadcast::channel(32).0;
 
         LobbyCache {
@@ -87,54 +89,73 @@ impl LobbyCache {
         self.update_broadcast_sender.subscribe()
     }
 
-    async fn handle_message(
-        update_broadcast_sender: broadcast::Sender<()>,
-        last_update: Arc<TokioMutex<Option<time::SystemTime>>>,
-        map_ref: Arc<DashMap<String, StaleLobby>>,
-        msg: Message,
-        writer_tx_clone: Sender<Message>,
-    ) -> error::Result<()> {
-        if msg.is_text() || msg.is_binary() {
-            let update: WebsocketMessageReceive = serde_json::from_str(msg.to_string().as_str())?;
+    async fn handle_lobby_update(
+        &self,
+        overwrite_lobbies: HashMap<String, Lobby>,
+        delete_lobbies: Vec<i64>,
+        reset: bool,
+    ) {
+        let mut queue_broadcaster = false;
+        if !overwrite_lobbies.is_empty() || !delete_lobbies.is_empty() || reset {
+            debug!("Sending update broadcast");
+            queue_broadcaster = true;
+        }
 
-            match update {
-                WebsocketMessageReceive::Ping { data } => {
-                    debug!("ping");
-                    let message = serde_json::to_string(&WebsocketMessageSend {
-                        message: "ping".to_string(),
-                        subscribe: None,
-                        location: None,
-                        data: Some(Value::from(data)),
-                    })?;
-                    writer_tx_clone.send(Message::Text(message)).await.unwrap();
+        if reset {
+            self.lobby_cache.clear();
+        }
+        for (lobby_id, lobby) in overwrite_lobbies {
+            self.lobby_cache.insert(lobby_id, lobby);
+        }
+        for lobby_id in delete_lobbies {
+            self.lobby_cache.remove(&lobby_id.to_string());
+        }
+
+        if queue_broadcaster {
+            let _ = self.update_broadcast_sender.send(());
+        }
+
+        self.last_update
+            .lock()
+            .await
+            .replace(time::SystemTime::now());
+    }
+
+    async fn handle_message(&self, msg: Message) -> error::Result<()> {
+        if msg.is_text() || msg.is_binary() {
+            match serde_json::from_str::<WebsocketMessageReceiveAllCurrentLobbies>(
+                msg.to_string().as_str(),
+            ) {
+                Ok(all_current_lobbies) => {
+                    self.handle_lobby_update(all_current_lobbies.allcurrentlobbies, vec![], true)
+                        .await;
                 }
-                WebsocketMessageReceive::Lobby { data } => {
-                    debug!("lobby");
-                    for lobby in data {
-                        if lobby.is_lobby {
-                            map_ref.insert(
-                                lobby.id.clone(),
-                                StaleLobby {
-                                    lobby,
-                                    last_checked_in: time::SystemTime::now(),
+                Err(e1) => {
+                    match serde_json::from_str::<WebsocketMessageReceiveFollowUp>(
+                        msg.to_string().as_str(),
+                    ) {
+                        Ok(followup) => {
+                            self.handle_lobby_update(
+                                followup.updatedlobbies,
+                                followup.deletedlobbies,
+                                false,
+                            )
+                            .await;
+                        }
+                        Err(e2) => {
+                            warn!("Received unknown message");
+
+                            return Err(error::LobbyCacheError::Parsing(
+                                error::MessageParsingError {
+                                    message: msg.to_string(),
+                                    error_parsing_all_messages: e1,
+                                    error_parsing_followup_message: e2,
                                 },
-                            );
-                        } else if map_ref.contains_key(&lobby.id) {
-                            map_ref.remove(&lobby.id);
+                            ));
                         }
                     }
-
-                    map_ref.retain(|_, lobby| {
-                        lobby.last_checked_in.elapsed().unwrap() < Duration::from_secs(120)
-                    });
-                    if update_broadcast_sender.receiver_count() > 0 {
-                        debug!("Sending update broadcast");
-                        let _ = update_broadcast_sender.send(());
-                    }
-
-                    last_update.lock().await.replace(time::SystemTime::now());
                 }
-            }
+            };
         }
 
         Ok(())
@@ -142,189 +163,129 @@ impl LobbyCache {
 
     pub async fn run(&self) {
         self.running.store(true, Ordering::SeqCst);
-        let (tx, rx) = oneshot::channel::<()>();
+        let (tx, mut rx) = mpsc::channel::<()>(3);
         *self.shutdown.lock().await = tx;
-
-        let background_shutdown_tx = broadcast::channel(32).0;
 
         let map_ref_moved = self.lobby_cache.clone();
         let update_broadcast_sender_moved = self.update_broadcast_sender.clone();
 
-        let background_shutdown_tx_moved = background_shutdown_tx.clone();
-        let mut background_shutdown_tx_cloned = background_shutdown_tx.subscribe();
         let last_update_moved = self.last_update.clone();
-        let background_task = tokio::spawn(async move {
-            // Connect to the server, and retry if the connection fails
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
-            info!("Starting websocket connection loop");
+
+        info!("Starting websocket connection loop");
+        loop {
+            let ws_stream = loop {
+                info!("Connecting to websocket...");
+
+                // https://docs.rs/tungstenite/latest/src/tungstenite/client.rs.html#219
+                let uri = AOE2LOBBY_URL.clone();
+                let authority = uri
+                    .authority()
+                    .ok_or(Error::Url(UrlError::NoHostName))
+                    .unwrap()
+                    .as_str();
+                let host = authority
+                    .find('@')
+                    .map(|idx| authority.split_at(idx + 1).1)
+                    .unwrap_or_else(|| authority);
+
+                let req = Request::builder()
+                    .method("GET")
+                    .header("Host", host)
+                    .header("Connection", "Upgrade")
+                    .header("Upgrade", "websocket")
+                    .header("Sec-WebSocket-Version", "13")
+                    .header("Sec-WebSocket-Key", generate_key())
+                    .header(
+                        "Sec-WebSocket-Extensions",
+                        "permessage-deflate; client_max_window_bits",
+                    )
+                    .header("Origin", AOE2LOBBY_ORIGIN.clone())
+                    .header(
+                        USER_AGENT,
+                        "Lobby-is-up-bot;Repo:https://github.com/L1ghtman2k/lobby-is-up",
+                    )
+                    .uri(uri)
+                    .body(())
+                    .unwrap();
+
+                match connect_async(req).await {
+                    Ok((ws_stream, _)) => {
+                        break ws_stream;
+                    }
+                    Err(e) => {
+                        error!(
+                            "Error connecting to websocket, retrying in 5 seconds. Error: {:?}",
+                            e
+                        );
+
+                        tokio::select! {
+                            _ = rx.recv() => {
+                                warn!("Shutdown received, shutting down websocket connection loop");
+                                return;
+                            }
+                            _ = sleep(Duration::from_secs(7)) => {
+                                warn!("Reconnecting to websocket after 7 seconds of waiting");
+                                continue;
+                            }
+                        }
+                    }
+                }
+            };
+            info!("WebSocket handshake has been successfully completed");
+
+            let (mut _write, mut read) = ws_stream.split();
+
+            let _update_broadcast_sender_cloned = update_broadcast_sender_moved.clone();
+            let _map_ref = map_ref_moved.clone();
+            let _last_update_clone = last_update_moved.clone();
+
+            debug!("Starting websocket reader");
             loop {
-                let (connection_restart_tx, mut connection_restart_rx) = broadcast::channel(32);
-
-                let ws_stream = loop {
-                    info!("Connecting to websocket...");
-                    http::Request::builder()
-                        .uri(AOE2_URL.as_str())
-                        .header(
-                            USER_AGENT,
-                            "Lobby-is-up-bot;Repo:https://github.com/L1ghtman2k/lobby-is-up",
-                        )
-                        .body(())
-                        .unwrap();
-
-                    match connect_async(AOE2_URL.clone()).await {
-                        Ok((ws_stream, _)) => {
-                            break ws_stream;
-                        }
-                        Err(e) => {
-                            error!(
-                                "Error connecting to websocket, retrying in 5 seconds. Error: {:?}",
-                                e
-                            );
-                            interval.tick().await;
-                        }
-                    }
-                };
-                info!("WebSocket handshake has been successfully completed");
-
-                let (mut write, mut read) = ws_stream.split();
-
-                let (writer_tx, mut writer_rx) = mpsc::channel(32);
-
-                debug!("Starting websocket writer");
-                // Spawn a task to write messages from the channel to the WebSocket
-                let connection_restart_tx_clone = connection_restart_tx.clone();
-                let mut shutdown_broadcast_sender_writer = background_shutdown_tx_moved.subscribe();
-                let mut connection_restart_rx_writer = connection_restart_tx.subscribe();
-                let _write_task = tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            _ = shutdown_broadcast_sender_writer.recv() => {
-                                warn!("Shutdown received, shutting down websocket writer");
-                                break;
-                            }
-                            _ = connection_restart_rx_writer.recv() => {
-                                warn!("Restart received, shutting down websocket writer");
-                                break;
-                            }
-                            msg = writer_rx.recv() => {
-                                match msg {
-                                    Some(msg) => {
-                                        debug!("Sending message: {:?}", msg);
-                                        if let Err(e) = write.send(msg).await {
-                                            let e = Arc::new(e);
-                                            error!("Error sending message: {:?}", e);
-                                            connection_restart_tx_clone.send(e).unwrap();
-                                            break;
-                                        }
-                                    }
-                                    None => {
-                                        warn!("Websocket writer channel closed");
-                                        break;
-                                    }
-                                }
-
-                            }
-                        }
-                    }
-                });
-
-                let initial_messages: Vec<WebsocketMessageSend> = vec![
-                    WebsocketMessageSend {
-                        message: "subscribe".to_string(),
-                        subscribe: Some(vec![0]),
-                        location: None,
-                        data: None,
-                    },
-                    WebsocketMessageSend {
-                        message: "location".to_string(),
-                        subscribe: None,
-                        location: Some(AOE2DE_LOBBY_LOCATION.to_string()),
-                        data: None,
-                    },
-                    WebsocketMessageSend {
-                        message: "subscribe".to_string(),
-                        subscribe: Some(vec![AOE2DE_APP_ID]),
-                        location: None,
-                        data: None,
-                    },
-                ];
-                for message in initial_messages {
-                    let message = serde_json::to_string(&message).unwrap();
-                    writer_tx.send(Message::Text(message)).await.unwrap();
-                }
-
-                // Spawn a task to read messages from the channel to the WebSocket
-                let writer_tx_clone = writer_tx.clone();
-                let connection_restart_tx_clone = connection_restart_tx.clone();
-
-                let update_broadcast_sender_cloned = update_broadcast_sender_moved.clone();
-                let map_ref = map_ref_moved.clone();
-                let mut connection_restart_rx_reader = connection_restart_tx.subscribe();
-                let mut shutdown_broadcast_sender_reader = background_shutdown_tx_moved.subscribe();
-                let last_update_clone = last_update_moved.clone();
-                let _read_task = tokio::spawn(async move {
-                    debug!("Starting websocket reader");
-                    loop {
-                        tokio::select! {
-                            _ = shutdown_broadcast_sender_reader.recv() => {
-                                warn!("Shutdown received, shutting down websocket reader");
-                                break;
-                            }
-                            _ = connection_restart_rx_reader.recv() => {
-                                warn!("Restart received, shutting down websocket reader");
-                                break;
-                            }
-                            message = read.next() => {
-                                match message {
-                                    Some(Ok(msg)) => {
-                                        if let Err(e) = Self::handle_message(
-                                            update_broadcast_sender_cloned.clone(),
-                                            last_update_clone.clone(),
-                                            map_ref.clone(),
-                                            msg,
-                                            writer_tx_clone.clone(),
-                                        )
-                                            .await
-                                        {
-                                            error!("Error handling message: {:?}", e);
-                                        }
-                                    }
-                                    Some(Err(e)) => {
-                                        let e = Arc::new(e);
-                                        error!("Error reading message: {:?}", e);
-                                        connection_restart_tx_clone.send(e.clone()).unwrap();
-                                    }
-                                    None => {
-                                        warn!("Websocket reader channel closed. Restarting connection");
-                                        connection_restart_tx_clone.send(Arc::new(tokio_tungstenite::tungstenite::error::Error::ConnectionClosed)).unwrap();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-
                 tokio::select! {
-                    err = connection_restart_rx.recv() => {
-                        error!("Connection error: {:?}", err);
-                        futures::future::join_all(vec![
-                            _write_task,
-                            _read_task,
-                        ]).await;
-                        info!("Restarting connection");
-                    },
-                    _ = background_shutdown_tx_cloned.recv() => {
-                        writer_tx.send(Message::Close(None)).await.unwrap();
-                        warn!("Closing websocket");
-                        break
+                    _ = rx.recv() => {
+                        warn!("Shutdown received, shutting down websocket reader");
+                        return;
                     }
+                    message = read.next() => {
+                        match message {
+                            Some(Ok(msg)) => {
+                                if let Err(e) = self.handle_message(
+                                    msg,
+                                )
+                                    .await
+                                {
+                                    error!("Error handling message: {:?}", e);
+                                }
+                            }
+                            Some(Err(e)) => {
+                                let e = Arc::new(e);
+                                error!("Error reading message: {:?}. Reconnecting...", e);
+                            }
+                            None => {
+                                warn!("Websocket reader channel closed. Restarting connection...");
+                                break;
+                            }
+                        }
+                    }
+
+                    _ = sleep(Duration::from_secs(20)) => {
+                        warn!("Didn't receive any messages for 20 seconds. Reconecting...");
+                        break;
+                    }
+
                 }
-                interval.tick().await;
             }
-        });
-        rx.await.unwrap();
-        background_shutdown_tx.send(()).unwrap();
-        background_task.await.unwrap();
+
+            tokio::select! {
+                _ = rx.recv() => {
+                    warn!("Shutdown received, shutting down websocket connection loop");
+                    return;
+                }
+                _ = sleep(Duration::from_secs(5)) => {
+                    warn!("Reconnecting to websocket after 5 seconds of waiting");
+                    continue;
+                }
+            }
+        }
     }
 }

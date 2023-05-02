@@ -46,7 +46,7 @@ impl LobbyHandler {
     async fn register_lobby_id_channel(
         &self,
         game_id: &str,
-    ) -> error::Result<(Uuid, Arc<Receiver<()>>)> {
+    ) -> error::Result<(Uuid, Receiver<()>)> {
         let mut channel_queue = self.channel_queue.lock().await;
         if channel_queue.len() > 5 {
             return Err(error::CommandError::TooManyLobbies);
@@ -66,7 +66,7 @@ impl LobbyHandler {
 
         queue.push((uuid, Arc::new(sender)));
 
-        Ok((uuid, Arc::new(receiver)))
+        Ok((uuid, receiver))
     }
 
     async fn unregister(channel_queue: ChannelQueue, game_id: &str, uuid: Uuid) {
@@ -83,7 +83,7 @@ impl LobbyHandler {
             .lobby_cache
             .lobby_cache
             .get(game_id)
-            .map(|lobby_ref| lobby_ref.clone().lobby);
+            .map(|lobby_ref| lobby_ref.clone());
     }
 
     pub async fn run(&self, ctx: &Context, command: ApplicationCommandInteraction) {
@@ -141,7 +141,7 @@ impl LobbyHandler {
                 })
                 .await
             {
-                error!("Cannot respond to slash command: {}", why);
+                error!("Cannot respond to slash command: {:?}", why);
 
                 return;
             }
@@ -150,7 +150,7 @@ impl LobbyHandler {
 
             for _ in 0..10 {
                 if let Some(value) = self.get_lobby(game_id) {
-                    debug!("Aoe2 Registered lobby with id: {}", value.id);
+                    debug!("Aoe2 Registered lobby with id: {}", value.lobbyid);
                     result = Some(value);
                     break;
                 } else {
@@ -168,12 +168,11 @@ impl LobbyHandler {
                         })
                         .await
                     {
-                        error!("Cannot respond to slash command: {}", why);
+                        error!("Cannot respond to slash command: {:?}", why);
                         return;
                     }
 
                     let mut update_receiver = self.lobby_cache.subscribe();
-
                     loop {
                         debug!("Inside of updater loop");
                         tokio::select! {
@@ -207,7 +206,7 @@ impl LobbyHandler {
                                     })
                                     .await
                                 {
-                                    error!("Cannot respond to slash command: {}", why);
+                                    error!("Cannot respond to slash command: {:?}", why);
                                     break;
                                 }
 
@@ -231,7 +230,7 @@ impl LobbyHandler {
                                     })
                                     .await
                                 {
-                                    error!("Cannot respond to slash command: {}", why);
+                                    error!("Cannot respond to slash command: {:?}", why);
                                     break;
                                 }
                             }
@@ -251,7 +250,7 @@ impl LobbyHandler {
                         })
                         .await
                     {
-                        error!("Cannot respond to slash command: {}", why);
+                        error!("Cannot respond to slash command: {:?}", why);
                     }
                 }
             }
@@ -310,8 +309,8 @@ impl<F: FnOnce()> Drop for Defer<F> {
 struct State {
     players: String,
     color: Color,
-    num_players: i64,
-    num_slots: i64,
+    slots_taken: i64,
+    slots_total: i64,
     id: String,
 }
 
@@ -319,17 +318,17 @@ fn extract_state(lobby: &Lobby) -> State {
     State {
         players: format_players(lobby),
         color: extract_colors(lobby),
-        num_players: lobby.num_players,
-        num_slots: lobby.num_slots,
-        id: lobby.id.clone(),
+        slots_taken: lobby.slotstaken,
+        slots_total: lobby.slotstotal,
+        id: lobby.lobbyid.clone().to_string(),
     }
 }
 
 fn create_embed(state: &State) -> CreateEmbed {
     let mut embed = CreateEmbed::default();
-    let remaining_players = state.num_slots - state.num_players;
-    let remaining_players = if remaining_players > 0 {
-        format!("+{}", remaining_players)
+    let remaining_slots = state.slots_total - state.slots_taken;
+    let remaining_slots = if remaining_slots > 0 {
+        format!("+{}", remaining_slots)
     } else {
         "Lobby is full".to_string()
     };
@@ -337,7 +336,7 @@ fn create_embed(state: &State) -> CreateEmbed {
         .title(format!("Lobby is up! aoe2de://0/{}", state.id))
         .url(format!("https://aoe2.net/j/{}", state.id))
         .color(state.color)
-        .footer(|footer| footer.text(remaining_players))
+        .footer(|footer| footer.text(remaining_slots))
         .description(state.players.clone());
     embed
 }
@@ -360,19 +359,23 @@ fn create_embed(state: &State) -> CreateEmbed {
 // }
 
 fn extract_colors(lobby: &Lobby) -> Color {
-    if lobby.full {
-        Color::RED
-    } else {
+    if lobby.slotstotal - lobby.slotstaken > 0 {
         Colour::DARK_GREEN
+    } else {
+        Color::RED
     }
 }
 
 fn format_players(lobby: &Lobby) -> String {
     let mut content = String::new();
     let mut players = vec![];
-    for player in lobby.players.iter() {
+    for player in lobby.slot.values() {
         if let Some(name) = &player.name {
-            players.push(name.clone());
+            if name != "Open" && name != "Closed" {
+                players.push(name.clone());
+            } else if name.is_empty() {
+                players.push("Unknown".to_string());
+            }
         } else {
             players.push("Unknown".to_string());
         }
