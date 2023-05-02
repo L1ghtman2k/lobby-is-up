@@ -1,6 +1,6 @@
 # lobby-is-up
 A Discord bot written in rust. 
-The bot continuously monitors aoe2.net, and keeps the state of all active aoe2 lobbies.
+The bot continuously monitors aoe2lobby.com, and keeps the state of all active aoe2 lobbies.
 The bot provides a slash command to query the state of a lobby. It updates the players in the lobby, in real time by editing the discord embed.
 Example: `/lobby lobby_id:aoe2de://0/230389981`
 
@@ -14,7 +14,3 @@ Invite: `https://discord.com/api/oauth2/authorize?client_id=<CLIENT_ID>&permissi
 ## Docker
 1. Build the docker image: `docker build -t lobby-is-up .`
 2. Run the image: `docker run -e DISCORD_TOKEN -e GUILD_ID lobby-is-up` (Assuming the environment variables are set)
-
-
-Todos:
-- [ ] https://aoe2lobby.com/ as main source, and aoe2.net as fallback

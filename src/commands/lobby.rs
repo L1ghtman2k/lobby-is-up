@@ -98,7 +98,8 @@ impl LobbyHandler {
                     create_interaction_response(
                         ctx,
                         command,
-                        "AOE2.net hasn't replied in over a minute. Try again later...".to_string(),
+                        "aoe2lobby.com hasn't replied in over a minute. Try again later..."
+                            .to_string(),
                     )
                     .await;
                     return;
@@ -134,7 +135,7 @@ impl LobbyHandler {
                             message.embed(|embed| {
                                 embed
                                     .title(format!("{}", lobby_id))
-                                    .url(format!("https://aoe2.net/j/{}", game_id));
+                                    .url(format!("https://aoe2lobby.com/j/{}", game_id));
                                 embed
                             })
                         })
@@ -199,7 +200,7 @@ impl LobbyHandler {
                                         response.embed(|embed| {
                                             embed
                                                 .title(format!("{}", lobby_id))
-                                                .url(format!("https://aoe2.net/j/{}", game_id))
+                                                .url(format!("https://aoe2lobby.com/j/{}", game_id))
                                                 .description("Lobby no longer active");
                                             embed
                                         })
@@ -243,8 +244,8 @@ impl LobbyHandler {
                             response.embed(|embed| {
                                 embed
                                     .title(format!("{}", lobby_id))
-                                    .url(format!("https://aoe2.net/j/{}", game_id))
-                                    .description("Aoe2.net hasn't picked up this lobby after 30 seconds.\nPlayer data will be unavailable.");
+                                    .url(format!("https://aoe2lobby.com/j/{}", game_id))
+                                    .description("aoe2lobby.com hasn't picked up this lobby after 30 seconds.\nPlayer data will be unavailable.");
                                 embed
                             })
                         })
@@ -334,7 +335,7 @@ fn create_embed(state: &State) -> CreateEmbed {
     };
     embed
         .title(format!("Lobby is up! aoe2de://0/{}", state.id))
-        .url(format!("https://aoe2.net/j/{}", state.id))
+        .url(format!("https://aoe2lobby.com/j/{}", state.id))
         .color(state.color)
         .footer(|footer| footer.text(remaining_slots))
         .description(state.players.clone());
@@ -353,7 +354,7 @@ fn create_embed(state: &State) -> CreateEmbed {
 //         button
 //             .style(ButtonStyle::Success)
 //             .label("Join")
-//             .url(format!("https://aoe2.net/j/{}", state.id))
+//             .url(format!("https://aoe2lobby.com/j/{}", state.id))
 //     });
 //     row
 // }
