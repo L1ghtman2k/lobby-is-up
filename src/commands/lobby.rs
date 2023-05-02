@@ -14,6 +14,7 @@ use serenity::model::application::interaction::application_command::{
 use serenity::model::application::interaction::InteractionResponseType;
 use serenity::model::prelude::command::CommandOptionType;
 
+use scopeguard::defer;
 use serenity::utils::{Color, Colour};
 use std::sync::Arc;
 
@@ -64,7 +65,7 @@ impl LobbyHandler {
 
         let uuid = Uuid::new_v4();
 
-        queue.push((uuid, Arc::new(sender)));
+        queue.insert(0, (uuid, Arc::new(sender)));
 
         Ok((uuid, receiver))
     }
@@ -121,11 +122,11 @@ impl LobbyHandler {
             let game_id_clone = game_id.to_string();
             let uuid_clone = uuid;
 
-            let _d = Defer::new(|| {
+            defer! {
                 tokio::spawn(async move {
                     Self::unregister(channel_queue_clone, game_id_clone.as_str(), uuid_clone).await
                 });
-            });
+            }
 
             if let Err(why) = command
                 .create_interaction_response(&ctx.http, |response| {
@@ -179,6 +180,20 @@ impl LobbyHandler {
                         tokio::select! {
                             _ = cancel_receiver.recv() => {
                                 debug!("Received cancel");
+                                let mut last_embed = create_embed(&state);
+                                {
+                                    last_embed.footer(|footer| footer.text("Message no longer updated live"));
+                                }
+
+                                if let Err(why) = command
+                                    .edit_original_interaction_response(&ctx.http, |response| {
+                                        response.set_embed(last_embed)
+                                    })
+                                    .await
+                                {
+                                    error!("Cannot respond to slash command: {:?}", why);
+                                    return;
+                                }
                                 break;
                             }
                             _ = update_receiver.recv() => {
@@ -286,24 +301,6 @@ pub fn extract_lobby_id(options: &[CommandDataOption]) -> Option<String> {
         }
     }
     None
-}
-
-struct Defer<F: FnOnce()> {
-    f: Option<F>,
-}
-
-impl<F: FnOnce()> Defer<F> {
-    fn new(f: F) -> Defer<F> {
-        Defer { f: Some(f) }
-    }
-}
-
-impl<F: FnOnce()> Drop for Defer<F> {
-    fn drop(&mut self) {
-        if let Some(f) = self.f.take() {
-            f();
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

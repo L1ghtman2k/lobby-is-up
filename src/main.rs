@@ -28,12 +28,14 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
 struct Handler {
-    lobby_cache: Arc<LobbyCache>,
+    lobby_handler: Arc<LobbyHandler>,
 }
 
 impl Handler {
     pub fn new(lobby_cache: Arc<LobbyCache>) -> Self {
-        Self { lobby_cache }
+        Self {
+            lobby_handler: Arc::new(LobbyHandler::new(lobby_cache)),
+        }
     }
 }
 
@@ -62,9 +64,7 @@ impl EventHandler for Handler {
 
             match command.data.name.as_str() {
                 "lobby" => {
-                    LobbyHandler::new(self.lobby_cache.clone())
-                        .run(&ctx, command)
-                        .await
+                    self.lobby_handler.run(&ctx, command).await;
                 }
                 _ => {
                     create_interaction_response(&ctx, command, "not implemented :(".to_string())
