@@ -128,6 +128,9 @@ impl LobbyHandler {
                 });
             }
 
+            // Discord allows for up to 15 minutes for a response
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(14 * 60);
+
             if let Err(why) = command
                 .create_interaction_response(&ctx.http, |response| {
                     response
@@ -196,6 +199,23 @@ impl LobbyHandler {
                                 }
                                 break;
                             }
+                            _ = tokio::time::sleep_until(deadline) => {
+                                let mut last_embed = create_embed(&state);
+                                {
+                                    last_embed.footer(|footer| footer.text("Message no longer updated live, as it was up for over 15 minutes"));
+
+                                }
+                                if let Err(why) = command
+                                    .edit_original_interaction_response(&ctx.http, |response| {
+                                        response.set_embed(last_embed)
+                                    })
+                                    .await
+                                {
+                                    error!("Cannot respond to slash command: {:?}", why);
+                                    return;
+                                }
+                                break;
+                            }
                             _ = update_receiver.recv() => {
                                 debug!("Received update");
                             }
@@ -203,6 +223,8 @@ impl LobbyHandler {
                                 debug!("Mandatory update");
                             }
                         }
+
+
 
                         debug!("Attempting to update interaction response");
 
