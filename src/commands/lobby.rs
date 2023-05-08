@@ -391,7 +391,7 @@ fn format_players(lobby: &Lobby) -> String {
     let mut players = vec![];
     for player in lobby.slot.values() {
         if let Some(name) = &player.name {
-            if !name.is_empty() && name != "Open" && name != "Closed" {
+            if !name.is_empty() {
                 players.push(name.clone());
             } else {
                 players.push("Unknown".to_string());
