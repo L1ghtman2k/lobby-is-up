@@ -390,13 +390,7 @@ fn format_players(lobby: &Lobby) -> String {
     let mut content = String::new();
     let mut players = vec![];
     for player in lobby.slot.values() {
-        if let Some(name) = &player.name {
-            if !name.is_empty() {
-                players.push(name.clone());
-            } else {
-                players.push("Unknown".to_string());
-            }
-        }
+        &player.name.unwrap_or("Unknown".to_string());
     }
     //Sort players by name
     players.sort();
