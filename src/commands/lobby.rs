@@ -401,7 +401,5 @@ fn format_players(lobby: &Lobby) -> String {
 
     let content = format!("```\n{}```", content);
 
-    println!("{}", content);
-
     content
 }
