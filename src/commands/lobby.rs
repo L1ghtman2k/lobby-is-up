@@ -399,6 +399,9 @@ fn format_players(lobby: &Lobby) -> String {
         content.push_str(&format!("{}\n", player));
     }
 
-    let content = format!("```{}```", content);
+    let content = format!("```\n{}```", content);
+
+    println!("{}", content);
+
     content
 }
