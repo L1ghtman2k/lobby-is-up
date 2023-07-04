@@ -18,6 +18,7 @@ pub struct Lobby {
     pub maxplayers: i64,
     pub relayserver_region: String,
     pub lobbyid: i64,
+    pub description: String,
     pub slotstaken: i64,
     pub slotstotal: i64,
     pub slot: HashMap<String, Slot>,

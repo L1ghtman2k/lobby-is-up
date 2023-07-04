@@ -328,6 +328,8 @@ pub fn extract_lobby_id(options: &[CommandDataOption]) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct State {
     players: String,
+    description: String,
+    relayserver_region: String,
     color: Color,
     slots_taken: i64,
     slots_total: i64,
@@ -337,6 +339,8 @@ struct State {
 fn extract_state(lobby: &Lobby) -> State {
     State {
         players: format_players(lobby),
+        description: lobby.description.clone(),
+        relayserver_region: lobby.relayserver_region.clone(),
         color: extract_colors(lobby),
         slots_taken: lobby.slotstaken,
         slots_total: lobby.slotstotal,
@@ -353,7 +357,10 @@ fn create_embed(state: &State) -> CreateEmbed {
         "Lobby is full".to_string()
     };
     embed
-        .title(format!("Lobby is up! aoe2de://0/{}", state.id))
+        .title(format!(
+            "Lobby is up! aoe2de://0/{}\nDescription: {}\nRegion: {}",
+            state.id, state.description, state.relayserver_region
+        ))
         .url(format!("https://aoe2lobby.com/j/{}", state.id))
         .color(state.color)
         .footer(|footer| footer.text(remaining_slots))
