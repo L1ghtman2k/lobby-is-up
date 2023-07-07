@@ -357,14 +357,16 @@ fn create_embed(state: &State) -> CreateEmbed {
         "Lobby is full".to_string()
     };
     embed
-        .title(format!(
-            "Lobby is up! aoe2de://0/{}\nDescription: {}\nRegion: {}",
-            state.id, state.description, state.relayserver_region
-        ))
+        .title(format!("aoe2de://0/{}", state.id,))
         .url(format!("https://aoe2lobby.com/j/{}", state.id))
         .color(state.color)
         .footer(|footer| footer.text(remaining_slots))
-        .description(state.players.clone());
+        .description(format!(
+            "Description: {}\nRegion: {}\n{}",
+            state.description,
+            state.relayserver_region,
+            state.players.clone()
+        ));
     embed
 }
 
