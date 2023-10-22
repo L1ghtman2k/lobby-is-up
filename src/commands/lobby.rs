@@ -138,7 +138,7 @@ impl LobbyHandler {
                         .interaction_response_data(|message| {
                             message.embed(|embed| {
                                 embed
-                                    .title(format!("{}", lobby_id))
+                                    .title(lobby_id.to_string())
                                     .url(format!("https://aoe2lobby.com/j/{}", game_id));
                                 embed
                             })
@@ -236,7 +236,7 @@ impl LobbyHandler {
                                     .edit_original_interaction_response(&ctx.http, |response| {
                                         response.embed(|embed| {
                                             embed
-                                                .title(format!("{}", lobby_id))
+                                                .title(lobby_id.to_string())
                                                 .url(format!("https://aoe2lobby.com/j/{}", game_id))
                                                 .description("Lobby no longer active");
                                             embed
@@ -280,7 +280,7 @@ impl LobbyHandler {
                         .edit_original_interaction_response(&ctx.http, |response| {
                             response.embed(|embed| {
                                 embed
-                                    .title(format!("{}", lobby_id))
+                                    .title(lobby_id.to_string())
                                     .url(format!("https://aoe2lobby.com/j/{}", game_id))
                                     .description("aoe2lobby.com hasn't picked up this lobby after 30 seconds.\nPlayer data will be unavailable.");
                                 embed

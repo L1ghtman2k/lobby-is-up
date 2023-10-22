@@ -2,10 +2,12 @@ mod commands;
 mod lobby_cache;
 
 use std::env;
+use std::env::VarError;
 use std::sync::Arc;
 
 use futures::future::join_all;
 use serenity::async_trait;
+use serenity::model::application::command::Command;
 use std::sync::atomic::Ordering;
 
 use tokio::signal;
@@ -29,12 +31,32 @@ use tracing_subscriber::{EnvFilter, Registry};
 
 struct Handler {
     lobby_handler: Arc<LobbyHandler>,
+    guild_ids: Vec<GuildId>,
 }
 
 impl Handler {
     pub fn new(lobby_cache: Arc<LobbyCache>) -> Self {
+        // extract guild ids, and if it is set(comma separated list of integers), verify it is an integer
+        let guild_ids: Vec<GuildId> = match env::var("GUILD_IDS") {
+            Ok(guild_ids) => guild_ids
+                .split(',')
+                .map(|guild_id| {
+                    GuildId(
+                        guild_id
+                            .parse()
+                            .expect("GUILD_IDS must be an vec of integers"),
+                    )
+                })
+                .collect(),
+            Err(VarError::NotPresent) => vec![],
+            Err(VarError::NotUnicode(_)) => {
+                panic!("GUILD_IDS must be a comma separated list of integers")
+            }
+        };
+
         Self {
             lobby_handler: Arc::new(LobbyHandler::new(lobby_cache)),
+            guild_ids,
         }
     }
 }
@@ -44,24 +66,47 @@ impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         info!("{} is connected!", ready.user.name);
 
-        let guild_id = GuildId(
-            env::var("GUILD_ID")
-                .expect("Expected GUILD_ID in environment")
-                .parse()
-                .expect("GUILD_ID must be an integer"),
-        );
-
-        let _commands = GuildId::set_application_commands(&guild_id, &ctx.http, |commands| {
-            commands.create_application_command(|command| LobbyHandler::register(command))
-        })
-        .await
-        .expect("Failed to register application commands");
+        if self.guild_ids.is_empty() {
+            info!("Running in global mode");
+            let _commands = Command::set_global_application_commands(&ctx.http, |commands| {
+                commands.create_application_command(|command| LobbyHandler::register(command))
+            }).await.expect("Failed to register application commands");
+        } else {
+            info!("Running in guild mode");
+            for guild_id in &self.guild_ids {
+                let _commands =
+                    GuildId::set_application_commands(guild_id, &ctx.http, |commands| {
+                        commands
+                            .create_application_command(|command| LobbyHandler::register(command))
+                    })
+                    .await
+                    .expect("Failed to register application commands");
+            }
+        }
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = interaction {
             debug!("Received command interaction: {:#?}", command);
 
+            //Verify that the interaction is a command is coming for expected guild
+            if !self.guild_ids.is_empty() {
+                match command.guild_id {
+                    Some(guild_id) => {
+                        if !self.guild_ids.contains(&guild_id) {
+                            warn!(
+                                "Received command interaction from unexpected guild: {}",
+                                guild_id
+                            );
+                            return;
+                        }
+                    }
+                    None => {
+                        warn!("Received command interaction without guild id");
+                        return;
+                    }
+                }
+            }
             match command.data.name.as_str() {
                 "lobby" => {
                     self.lobby_handler.run(&ctx, command).await;
